@@ -1,5 +1,6 @@
 """The G1 decision rules on synthetic ledgers (no training). Run: python -m tests.test_gate_logic"""
 import csv
+import json
 import os
 import shutil
 import tempfile
@@ -114,6 +115,19 @@ def test_review_fixes():
                                     1, 1.8, 1.8, 1.8])
         M = gate.report()
         assert any("A3_abl-ww_v8-s0" in f and "predate" in f for f in M["flags"]), M["flags"]
+        # a sweep point re-trained with --force supersedes its earlier ledger row everywhere
+        with open(os.path.join(d, "ledger.csv"), "a", newline="") as f:
+            csv.DictWriter(f, fieldnames=LEDGER_FIELDS).writerow(
+                {k: v for k, v in dict(run="A1_lr-ww-0.001", stage="A1_lr", arm="ww", seed=0, lr=1e-3, budget=4096,
+                                       status="ok", final_val_bpc=2.5).items()})
+        gate.select_lr()
+        with open(os.path.join(d, "lr_choice.json")) as f:
+            assert json.load(f)["ww"] == 2e-3
+        assert "ww" not in gate.lr_edges()
+        from ww import queue
+        queue.RESULTS = d
+        led = [r for r in queue.ledger_rows() if r["run"] == "A1_lr-ww-0.001"]
+        assert len(led) == 1 and float(led[0]["final_val_bpc"]) == 2.5, led
         print("PASS gate review fixes")
     finally:
         shutil.rmtree(root, ignore_errors=True)

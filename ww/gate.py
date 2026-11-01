@@ -36,11 +36,12 @@ T_CRIT = {1: 12.71, 2: 4.30, 3: 3.18, 4: 2.78, 5: 2.57, 6: 2.45, 7: 2.36, 8: 2.3
 
 
 def rows():
+    """Ledger rows, one per run: a run re-trained with --force supersedes its earlier row."""
     path = os.path.join(RESULTS, "ledger.csv")
     if not os.path.exists(path):
         return []
     with open(path) as f:
-        out = []
+        latest = {}
         for r in csv.DictReader(f):
             for k in ("lr", "budget", "targets_per_sec", "final_val_bpc", "active_seconds",
                       "train_gflop_per_token", "params_nonemb", "state_kb_1k", "state_kb_16k", "peak_mem_gb"):
@@ -49,7 +50,9 @@ def rows():
                 except (ValueError, KeyError):
                     r[k] = float("nan")
             r["seed"] = int(r["seed"])
-            out.append(r)
+            latest.pop(r["run"], None)
+            latest[r["run"]] = r
+        out = list(latest.values())
         return out
 
 

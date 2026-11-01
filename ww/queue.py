@@ -4,9 +4,9 @@
   python -m ww.queue A1              # run (or continue) a stage; finished runs are skipped
   python -m ww.queue A2 --dry_run    # print the commands without running them
   python -m ww.queue A3 --only deltanet,ww_v8   # only these arms of the stage
-  python -m ww.queue A2 --force ww:1            # re-train one finished run (ARM:SEED or the run name);
-                                                # log it in DEVIATIONS.md. The ledger keeps both rows and
-                                                # every reader uses the latest one.
+  python -m ww.queue A2 --force ww:1            # re-train finished runs (ARM:SEED = all its LRs in A1, or a
+                                                # run name); log it in DEVIATIONS.md. The ledger keeps both
+                                                # rows; every reader (queue, gate, plots) uses the latest.
   python -m ww.queue A1 --data_in_ram           # passed to ww.train (training file in RAM, ~12 GB)
 
 Stages (see PLAN.md for the why):
@@ -39,11 +39,16 @@ ISO_SECONDS = [600, 2400]
 
 
 def ledger_rows():
+    """Ledger rows, one per run: a run re-trained with --force supersedes its earlier row."""
     path = os.path.join(RESULTS, "ledger.csv")
     if not os.path.exists(path):
         return []
     with open(path) as f:
-        return list(csv.DictReader(f))
+        latest = {}
+        for r in csv.DictReader(f):
+            latest.pop(r["run"], None)
+            latest[r["run"]] = r
+        return list(latest.values())
 
 
 def finished(stage, arm, seed, budget_kind, budget, lr=None):

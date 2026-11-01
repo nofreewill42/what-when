@@ -133,12 +133,23 @@ def prefill(model, x, piece):
     return logits[:, -1:].clone(), states
 
 
+def tensor_bytes(obj) -> int:
+    """Bytes held by the tensors in a (nested) state structure."""
+    if torch.is_tensor(obj):
+        return obj.numel() * obj.element_size()
+    if isinstance(obj, dict):
+        return sum(tensor_bytes(v) for v in obj.values())
+    if isinstance(obj, (list, tuple)):
+        return sum(tensor_bytes(v) for v in obj)
+    return 0
+
+
 @torch.no_grad()
 def bench_decode(run_dir, contexts, batches, new_tokens, device):
     """Prefill `context` random characters, then time `new_tokens` one-token decode steps (eager PyTorch).
-    Memory is reported three ways: the peak during the prefill, the memory the prefill leaves behind
-    (state or KV cache plus the next token), and the peak during the decode steps. Each row is appended
-    as soon as it is measured; an out-of-memory (context, batch) is recorded with status "oom"."""
+    Memory is reported three ways: the peak during the prefill, the state or KV cache the model carries after
+    the prefill (bytes of its tensors, whole batch), and the peak during the decode steps. Each row is
+    appended as soon as it is measured; an out-of-memory (context, batch) is recorded with status "oom"."""
     model, ck = load_run(run_dir, device)
     model.eval()
     summary, seq_len = ck["summary"], ck["config"]["train"]["seq_len"]
@@ -155,17 +166,16 @@ def bench_decode(run_dir, contexts, batches, new_tokens, device):
                 if cuda:
                     torch.cuda.synchronize(device)
                     torch.cuda.empty_cache()
-                    base = torch.cuda.memory_allocated(device)
                     torch.cuda.reset_peak_memory_stats(device)
                 x = torch.randint(0, 128, (b, ctx), device=device)
                 with amp_context(device):
                     last, states = prefill(model, x, seq_len)
                     tok = last.argmax(-1)
                     x = last = None
+                    row["state_mem_mb"] = round(tensor_bytes(states) / 2**20, 3)
                     if cuda:
                         torch.cuda.synchronize(device)
                         row["prefill_peak_mem_mb"] = round(torch.cuda.max_memory_allocated(device) / 2**20, 1)
-                        row["state_mem_mb"] = round((torch.cuda.memory_allocated(device) - base) / 2**20, 2)
                         torch.cuda.reset_peak_memory_stats(device)
                     t0 = time.perf_counter()
                     for _ in range(new_tokens):
