@@ -238,8 +238,9 @@ class LM(nn.Module):
             self.lm_head.weight = self.embed.weight
 
     def reset_parameters(self):
+        # Conv1d = fla's short convolutions (gdn, deltanet): fla's own model init gives them N(0, 0.02) too.
         for m in self.modules():
-            if isinstance(m, nn.Linear):
+            if isinstance(m, (nn.Linear, nn.Conv1d)):
                 if getattr(m, "is_residual_out", False):
                     nn.init.zeros_(m.weight)
                 else:

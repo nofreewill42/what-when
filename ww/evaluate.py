@@ -141,7 +141,8 @@ def longctx(run_dir: str, lengths, max_chars: int, device, batch_chars: int = 65
         curves[str(L)] = {"edges": edges.tolist(),
                           "bpc": [float(nll[a:b].mean() / LN2) for a, b in zip(edges[:-1], edges[1:])]}
         rows.append({"run": summary["run"], "arm": summary["arm"], "seed": summary["seed"],
-                     "stage": summary["stage"], "L": L, "n_windows": len(offs),
+                     "stage": summary["stage"], "trained_at": summary.get("timestamp", ""), "L": L,
+                     "n_windows": len(offs),
                      "bpc_all": float(nll.mean() / LN2),
                      "bpc_pos_ge_train_len": float(late.mean() / LN2) if late.size else float("nan"),
                      "bpc_last_1024": float(nll[-1024:].mean() / LN2)})
@@ -149,15 +150,39 @@ def longctx(run_dir: str, lengths, max_chars: int, device, batch_chars: int = 65
               f"bpc_pos>={seq_len}={rows[-1]['bpc_pos_ge_train_len']:.4f}")
     with open(os.path.join(run_dir, "longctx.json"), "w") as f:
         json.dump({"rows": rows, "curves": curves, "max_chars": max_chars}, f, indent=1)
-    os.makedirs(RESULTS, exist_ok=True)
-    path = os.path.join(RESULTS, "longctx.csv")
-    new = not os.path.exists(path)
-    with open(path, "a", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        if new:
-            w.writeheader()
-        w.writerows(rows)
+    append_csv(os.path.join(RESULTS, "longctx.csv"), rows)
     return rows
+
+
+def append_csv(path, rows):
+    """Append rows to a results CSV. `trained_at` (the run's finish time) ties each row to one checkpoint,
+    so a re-trained run is re-evaluated and its old rows are ignored (ww.queue A5, ww.gate). If the file
+    has other columns, it is rewritten with the union of the columns."""
+    if not rows:
+        return
+    fields = list(rows[0].keys())
+    for r in rows[1:]:
+        fields += [k for k in r if k not in fields]
+    old = []
+    if os.path.exists(path):
+        with open(path) as f:
+            rd = csv.DictReader(f)
+            have = rd.fieldnames or []
+            if have == fields:
+                old = None
+            else:
+                old = list(rd)
+                fields = have + [k for k in fields if k not in have]
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    if old is None:
+        with open(path, "a", newline="") as f:
+            csv.DictWriter(f, fieldnames=fields).writerows(rows)
+        return
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields, restval="")
+        w.writeheader()
+        w.writerows(old)
+        w.writerows(rows)
 
 
 def main():

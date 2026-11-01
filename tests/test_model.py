@@ -110,6 +110,37 @@ def test_zero_init_residual_branches():
     assert rep["params_embedding"] == 2 * 128 * 256
 
 
+def test_conv1d_gets_the_standard_init():
+    """fla's short convolutions (gdn, deltanet) are nn.Conv1d; they get N(0, 0.02) like fla's own model init,
+    not PyTorch's uniform default (|w| <= 0.5 for a depthwise kernel of 4)."""
+    torch.manual_seed(0)
+    m = LM(ARMS["tpp"]["model"])
+    m.conv = torch.nn.Conv1d(512, 512, kernel_size=4, groups=512, bias=False)  # stand-in for fla's ShortConvolution
+    m.reset_parameters()
+    assert abs(m.conv.weight.std().item() - 0.02) < 0.002, m.conv.weight.std()
+
+
+def test_chunked_prefill_equals_one_pass():
+    """The decode benchmark prefills recurrent-only models in training-length pieces (bounded memory);
+    that must give the same last logits and the same state as one pass."""
+    from ww.bench import prefill
+    for arm in ("ww", "ww_v8", "ww_decay"):
+        model = tiny(arm)
+        x = torch.randint(0, 128, (2, 70))
+        with torch.no_grad():
+            full, st_full = model(x, want_state=True)
+            last, st_chunk = prefill(model, x, piece=16)
+        assert torch.allclose(last, full[:, -1:], atol=1e-9), arm
+        for a, b in zip(st_full, st_chunk):
+            assert torch.allclose(a["M"], b["M"], atol=1e-9) and torch.allclose(a["clock"], b["clock"], atol=1e-9)
+    model = tiny("tpp")  # attention keeps the one-pass prefill (its cache takes one token at a time)
+    x = torch.randint(0, 128, (1, 40))
+    with torch.no_grad():
+        full, _ = model(x)
+        last, st = prefill(model, x, piece=16)
+    assert torch.allclose(last, full[:, -1:], atol=1e-9) and st[0]["k"].shape[2] == 40
+
+
 
 def test_strided_eval_gives_fresh_training_length_context():
     """Every position p >= T is scored by a pass over the T characters ending at its block."""

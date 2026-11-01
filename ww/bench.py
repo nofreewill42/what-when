@@ -3,8 +3,8 @@
   python -m ww.bench train  --arms tpp,gdn,ww,...   # synthetic data: ms/update, targets/s, peak memory
                                                     # -> results/throughput.csv, results/micro_batch.json
   python -m ww.bench data                           # time to load one batch from the real training file
-  python -m ww.bench decode --run runs/<name>       # batch 1 and 8 decode tok/s and memory
-                                                    # -> results/decode.csv
+  python -m ww.bench decode --run runs/<name>       # batch 1 and 8 decode tok/s and memory (prefill peak,
+                                                    # state/cache held, decode-step peak) -> results/decode.csv
 
 The train benchmark tries micro-batches from 64 down, keeps the fastest one that fits in
 --mem_limit_gb, and records it in results/micro_batch.json (train.py picks it up with
@@ -13,7 +13,6 @@ The train benchmark tries micro-batches from 64 down, keeps the fastest one that
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import time
@@ -22,19 +21,12 @@ import torch
 import torch.nn.functional as F
 
 from ww.arms import load_arm
-from ww.evaluate import amp_context, load_run
-from ww.model import LM, decay_param_groups, param_report, state_bytes_per_seq, train_flops_per_token
+from ww.evaluate import amp_context, append_csv, load_run
+from ww.model import LM, Attention, decay_param_groups, param_report, state_bytes_per_seq, train_flops_per_token
 
 from ww.paths import RESULTS
 
-
-def _append_csv(path, rows):
-    new = not os.path.exists(path)
-    with open(path, "a", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        if new:
-            w.writeheader()
-        w.writerows(rows)
+_append_csv = append_csv
 
 
 def time_updates(model, opt, T, B, mb, n_updates, device, vocab=128):
@@ -127,50 +119,85 @@ def bench_data(n_batches=20):
     return sec
 
 
+def prefill(model, x, piece):
+    """Run the context x through the model; return (logits at the last position, states).
+    Models without attention layers go in pieces of `piece` tokens with the state carried over: the same
+    result as one pass (tests/test_model.py), with memory bounded by one training-length window. Models with
+    attention layers use one pass (the KV cache takes one new token at a time)."""
+    if x.shape[1] <= piece or any(isinstance(m, Attention) for m in model.modules()):
+        logits, states = model(x, want_state=True)
+        return logits[:, -1:].clone(), states
+    states = logits = None
+    for s in range(0, x.shape[1], piece):
+        logits, states = model(x[:, s:s + piece], states=states, want_state=True)
+    return logits[:, -1:].clone(), states
+
+
 @torch.no_grad()
 def bench_decode(run_dir, contexts, batches, new_tokens, device):
+    """Prefill `context` random characters, then time `new_tokens` one-token decode steps (eager PyTorch).
+    Memory is reported three ways: the peak during the prefill, the memory the prefill leaves behind
+    (state or KV cache plus the next token), and the peak during the decode steps. Each row is appended
+    as soon as it is measured; an out-of-memory (context, batch) is recorded with status "oom"."""
     model, ck = load_run(run_dir, device)
     model.eval()
     summary, seq_len = ck["summary"], ck["config"]["train"]["seq_len"]
+    cuda = device.type == "cuda"
     rows = []
     for ctx in contexts:
         for b in batches:
+            row = {"run": summary["run"], "arm": summary["arm"], "trained_at": summary.get("timestamp", ""),
+                   "context": ctx, "batch": b, "status": "ok", "tok_per_s": "", "ms_per_step": "",
+                   "peak_mem_mb": "", "prefill_peak_mem_mb": "", "state_mem_mb": ""}
+            x = last = states = logits = tok = None
             model.set_eval_window(seq_len if ctx > seq_len else None)
-            x = torch.randint(0, 128, (b, ctx), device=device)
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
-                torch.cuda.reset_peak_memory_stats(device)
             try:
+                if cuda:
+                    torch.cuda.synchronize(device)
+                    torch.cuda.empty_cache()
+                    base = torch.cuda.memory_allocated(device)
+                    torch.cuda.reset_peak_memory_stats(device)
+                x = torch.randint(0, 128, (b, ctx), device=device)
                 with amp_context(device):
-                    logits, states = model(x, want_state=True)
-                    tok = logits[:, -1:].argmax(-1)
-                    if device.type == "cuda":
+                    last, states = prefill(model, x, seq_len)
+                    tok = last.argmax(-1)
+                    x = last = None
+                    if cuda:
                         torch.cuda.synchronize(device)
+                        row["prefill_peak_mem_mb"] = round(torch.cuda.max_memory_allocated(device) / 2**20, 1)
+                        row["state_mem_mb"] = round((torch.cuda.memory_allocated(device) - base) / 2**20, 2)
+                        torch.cuda.reset_peak_memory_stats(device)
                     t0 = time.perf_counter()
                     for _ in range(new_tokens):
                         logits, states = model(tok, states=states, want_state=True)
                         tok = logits[:, -1:].argmax(-1)
-                    if device.type == "cuda":
+                    if cuda:
                         torch.cuda.synchronize(device)
                 sec = time.perf_counter() - t0
-            except NotImplementedError as e:
+                row["tok_per_s"] = round(b * new_tokens / sec, 1)
+                row["ms_per_step"] = round(sec / new_tokens * 1e3, 3)
+                if cuda:
+                    row["peak_mem_mb"] = round(torch.cuda.max_memory_allocated(device) / 2**20, 1)
+            except NotImplementedError as e:  # fla arms: decode is not wired, only the analytic state size
                 print(f"{summary['arm']}: {e}")
-                model.set_eval_window(None)
-                return rows
-            peak = torch.cuda.max_memory_allocated(device) / 2**20 if device.type == "cuda" else 0.0
+                row["status"] = "not_wired"
+            except torch.cuda.OutOfMemoryError:
+                row["status"] = "oom"
+            finally:
+                x = last = states = logits = tok = None
+                if cuda:
+                    torch.cuda.empty_cache()
             model.set_eval_window(None)
-            full_kv = state_bytes_per_seq(model, ctx + new_tokens) / 1024
+            row["state_kb_per_seq_fullkv"] = round(state_bytes_per_seq(model, ctx + new_tokens) / 1024, 1)
             model.set_eval_window(seq_len)
-            windowed = state_bytes_per_seq(model, ctx + new_tokens) / 1024
+            row["state_kb_per_seq_windowed"] = round(state_bytes_per_seq(model, ctx + new_tokens) / 1024, 1)
             model.set_eval_window(None)
-            rows.append({"run": summary["run"], "arm": summary["arm"], "context": ctx, "batch": b,
-                         "tok_per_s": round(b * new_tokens / sec, 1),
-                         "ms_per_step": round(sec / new_tokens * 1e3, 3), "peak_mem_mb": round(peak, 1),
-                         "state_kb_per_seq_windowed": round(windowed, 1),
-                         "state_kb_per_seq_fullkv": round(full_kv, 1), "eager": True})
-            print(rows[-1], flush=True)
-    if rows:
-        _append_csv(os.path.join(RESULTS, "decode.csv"), rows)
+            row["eager"] = True
+            append_csv(os.path.join(RESULTS, "decode.csv"), [row])
+            rows.append(row)
+            print(row, flush=True)
+            if row["status"] == "not_wired":
+                return rows
     return rows
 
 

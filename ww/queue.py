@@ -3,6 +3,11 @@
   python -m ww.queue plan            # list every stage, its runs, done/remaining, and GPU-hour estimate
   python -m ww.queue A1              # run (or continue) a stage; finished runs are skipped
   python -m ww.queue A2 --dry_run    # print the commands without running them
+  python -m ww.queue A3 --only deltanet,ww_v8   # only these arms of the stage
+  python -m ww.queue A2 --force ww:1            # re-train one finished run (ARM:SEED or the run name);
+                                                # log it in DEVIATIONS.md. The ledger keeps both rows and
+                                                # every reader uses the latest one.
+  python -m ww.queue A1 --data_in_ram           # passed to ww.train (training file in RAM, ~12 GB)
 
 Stages (see PLAN.md for the why):
   A0  anchor run (tpp_legacy, u8192) - the harness must reproduce an old local number
@@ -115,13 +120,30 @@ def is_done(spec):
     return finished(spec["stage"], spec["arm"], spec["seed"], budget_kind, budget, resolved_lr(spec))
 
 
-def command(spec):
+def run_name(spec):
+    """The run name ww.train gives this spec (None until its LR is known)."""
+    lr = resolved_lr(spec)
+    if lr is None:
+        return None
+    tag = f"u{spec['updates']}" if "updates" in spec else f"t{int(spec['seconds'])}s"
+    return f"{spec['stage']}-{spec['arm']}-s{spec['seed']}-{tag}-lr{float(lr):.1e}"
+
+
+def is_forced(spec, force):
+    return any(f == f"{spec['arm']}:{spec['seed']}" or f == run_name(spec) for f in force)
+
+
+def command(spec, force=False, data_in_ram=False):
     lr = resolved_lr(spec)
     cmd = [sys.executable, "-m", "ww.train", "--arm", spec["arm"], "--seed", str(spec["seed"]),
            "--stage", spec["stage"], "--micro_batch", "auto", "--resume"]
     if lr is not None:
         cmd += ["--lr", repr(float(lr))]
     cmd += ["--updates", str(spec["updates"])] if "updates" in spec else ["--seconds", str(spec["seconds"])]
+    if force:
+        cmd.append("--force")
+    if data_in_ram:
+        cmd.append("--data_in_ram")
     return cmd
 
 
@@ -172,58 +194,76 @@ def lr_sweep_extensions():
     return extra
 
 
-def run_stage(stage, dry_run=False):
-    specs = runs_for(stage)
+def run_stage(stage, dry_run=False, only=(), force=(), data_in_ram=False):
+    specs = [s for s in runs_for(stage) if not only or s["arm"] in only]
+    if only and not specs:
+        raise SystemExit(f"--only {','.join(only)}: no run of stage {stage} has these arms")
+    pending_force = [s for s in specs if is_forced(s, force)]
+    if force and not pending_force:
+        raise SystemExit(f"--force {','.join(force)}: no run of stage {stage} matches (use ARM:SEED or the run name)")
     while True:
-        todo = [s for s in specs if not is_done(s)]
+        todo = [s for s in specs if s in pending_force or not is_done(s)]
         for spec in todo:
             if spec["lr"] == "auto" and resolved_lr(spec) is None:
                 raise SystemExit("results/lr_choice.json missing: run `python -m ww.gate select-lr` first")
-            cmd = command(spec)
+            cmd = command(spec, force=spec in pending_force, data_in_ram=data_in_ram)
             print(" ".join(cmd), flush=True)
             if not dry_run:
                 rc = subprocess.call(cmd, cwd=ROOT)
                 if rc != 0:
                     raise SystemExit(f"run failed with exit code {rc}: {' '.join(cmd)}")
+        pending_force = []  # a forced run is re-trained once
         if stage != "A1" or dry_run:
             break
-        ext = [s for s in lr_sweep_extensions() if not is_done(s)]
+        ext = [s for s in lr_sweep_extensions() if not is_done(s) and (not only or s["arm"] in only)]
         if not ext:
             break
         print(f"LR edge rule: adding {[(s['arm'], s['lr']) for s in ext]}")
         specs += ext
 
 
-def _csv_runs(name):
+def latest_ok(stage, arm, seed=0):
+    """The latest ledger row of (stage, arm, seed) if that run finished ok (a --force re-run adds a row)."""
+    last = None
+    for r in ledger_rows():
+        if r["stage"] == stage and r["arm"] == arm and int(r["seed"]) == seed:
+            last = r
+    return last if last is not None and last["status"] == "ok" else None
+
+
+def _evaluated(name):
+    """{run: {trained_at, ...}} of the checkpoints already evaluated in results/<name>."""
     path = os.path.join(RESULTS, name)
-    if not os.path.exists(path):
-        return set()
-    with open(path) as f:
-        return {r["run"] for r in csv.DictReader(f)}
+    out = {}
+    if os.path.exists(path):
+        with open(path) as f:
+            for r in csv.DictReader(f):
+                out.setdefault(r["run"], set()).add(r.get("trained_at", ""))
+    return out
 
 
 def run_a5(dry_run=False):
     """Evaluate finished checkpoints: long context for the main arms (R10 and R40, seed 0) and the
-    clock/memory ablations, decode speed for the longest-trained seed-0 tpp and ww runs."""
-    done_lc, done_dec = _csv_runs("longctx.csv"), _csv_runs("decode.csv")
+    clock/memory ablations, decode speed for the longest-trained seed-0 tpp and ww runs (and ww_hybrid,
+    ww_v8 if they ran). A checkpoint counts as evaluated only if its rows carry its own training timestamp,
+    so a re-trained run (--force) is evaluated again."""
+    done_lc, done_dec = _evaluated("longctx.csv"), _evaluated("decode.csv")
     targets = []
     for stage in ("A2_r10", "A4_r40"):
         for arm in MAIN_ARMS:
             targets.append((stage, arm))
-    for arm in ("ww_constclock", "ww_nowhen", "ww_decay", "ww_hybrid", "deltanet"):
+    for arm in ("ww_constclock", "ww_nowhen", "ww_decay", "ww_hybrid", "ww_v8", "deltanet"):
         targets.append(("A3_abl", arm))
     cmds = []
     for stage, arm in targets:
-        r = next((r for r in ledger_rows() if r["stage"] == stage and r["arm"] == arm
-                  and int(r["seed"]) == 0 and r["status"] == "ok"), None)
-        if r and r["run"] not in done_lc:
+        r = latest_ok(stage, arm)
+        if r and r["timestamp"] not in done_lc.get(r["run"], set()):
             cmds.append([sys.executable, "-m", "ww.evaluate", "longctx", "--run", os.path.join(RUNS, r["run"])])
-    for arm in ("tpp", "ww", "ww_hybrid"):
+    for arm in ("tpp", "ww", "ww_hybrid", "ww_v8"):
         r = None
         for stage in ("A4_r40", "A2_r10", "A3_abl"):
-            r = r or next((x for x in ledger_rows() if x["stage"] == stage and x["arm"] == arm
-                           and int(x["seed"]) == 0 and x["status"] == "ok"), None)
-        if r and r["run"] not in done_dec:
+            r = r or latest_ok(stage, arm)
+        if r and r["timestamp"] not in done_dec.get(r["run"], set()):
             cmds.append([sys.executable, "-m", "ww.bench", "decode", "--run", os.path.join(RUNS, r["run"])])
     for cmd in cmds:
         print(" ".join(cmd), flush=True)
@@ -263,13 +303,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("stage", help="plan | A0 | A1 | A2 | A3 | A3b | A4 | A4b | A5 | A6")
     ap.add_argument("--dry_run", action="store_true")
+    ap.add_argument("--only", default="", help="comma-separated arms: run only these arms of the stage")
+    ap.add_argument("--force", default="",
+                    help="comma-separated ARM:SEED or run names to re-train even if finished (log it)")
+    ap.add_argument("--data_in_ram", action="store_true", help="passed to ww.train")
     a = ap.parse_args()
+    split = lambda s: tuple(x.strip() for x in s.split(",") if x.strip())
     if a.stage == "plan":
         plan()
     elif a.stage == "A5":
         run_a5(a.dry_run)
     else:
-        run_stage(a.stage, a.dry_run)
+        run_stage(a.stage, a.dry_run, only=split(a.only), force=split(a.force), data_in_ram=a.data_in_ram)
 
 
 if __name__ == "__main__":

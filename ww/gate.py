@@ -132,29 +132,65 @@ def early():
     if dT is None or dG is None or dT["n"] < 3:
         print("E1 needs all three A2 seeds for ww, tpp and gdn.")
         return None
-    stop = (dT["mean"] > THRESH["early_tpp"] and dG["mean"] > THRESH["early_gdn"]
-            and all(x > THRESH["early_tpp"] / 2 for x in dT["diffs"]))
+    stop = (dT["mean"] > THRESH["early_tpp"] and dG["mean"] > THRESH["early_gdn"]  # PLAN §5: every seed > +0.10,
+            and all(x > THRESH["early_tpp"] / 2 for x in dT["diffs"] + dG["diffs"]))  # against both baselines
     print("E1: EARLY NO-GO recommended (skip A4/A6/A3; run A5 on the A2 runs, then the gate)" if stop
-          else "E1: continue with A4")
+          else "E1: no early exit (with Amendment 1 the next steps are the same: A5 on the A2 runs, then the gate)")
     return stop
 
 
 # ------------------------------------------------------------------------------------------------
-def longctx_table():
-    path = os.path.join(RESULTS, "longctx.csv")
+def current_rows(name, key):
+    """Rows of results/<name> (longctx.csv, decode.csv) that belong to the current checkpoint of their run:
+    a row's `trained_at` must equal the latest ledger timestamp of that run (rows without it are accepted).
+    Repeated measurements: the last row per `key` wins. Returns (rows, runs that only have stale rows)."""
+    path = os.path.join(RESULTS, name)
     if not os.path.exists(path):
-        return {}, None
+        return [], set()
+    latest = {r["run"]: r.get("timestamp", "") for r in rows()}
     with open(path) as f:
-        lc = list(csv.DictReader(f))
-    for stage in ("A4_r40", "A2_r10"):  # prefer the longest-trained seed-0 checkpoints
+        data = list(csv.DictReader(f))
+    keep, stale = {}, set()
+    for r in data:
+        t, now = r.get("trained_at", ""), latest.get(r["run"], "")
+        if t and now and t != now:
+            stale.add(r["run"])
+            continue
+        keep[tuple(r[k] for k in key)] = r
+    return list(keep.values()), stale - {r["run"] for r in keep.values()}
+
+
+def longctx_table():
+    lc, _ = current_rows("longctx.csv", ("run", "L"))
+
+    def pick(stage, arms):
         sel = {}
         for r in lc:
-            if r["stage"] == stage and int(r["seed"]) == 0:
+            if r["stage"] == stage and int(r["seed"]) == 0 and r["arm"] in arms:
                 sel.setdefault(r["arm"], {})[int(r["L"])] = {
                     "all": float(r["bpc_all"]), "late": float(r["bpc_pos_ge_train_len"])}
+        return sel
+
+    for stage in ("A4_r40", "A2_r10"):  # prefer the longest-trained seed-0 checkpoints
+        sel = pick(stage, MAIN_ARMS)
         if all(a in sel for a in MAIN_ARMS):
+            sel.update(pick("A3_abl", ABLATIONS))  # ablations (R10, seed 0) as extra rows
             return sel, stage
     return {}, None
+
+
+def lr_edges():
+    """{arm: best LR} for main arms whose best A1 learning rate is the lowest or highest LR tried
+    (after any edge extensions): their tuning may be incomplete (PLAN §5 flag)."""
+    out = {}
+    for arm in MAIN_ARMS:
+        rs = sorted([r for r in rows() if r["stage"] == "A1_lr" and r["arm"] == arm], key=lambda r: r["lr"])
+        ok = [r for r in rs if r["status"] == "ok" and not math.isnan(r["final_val_bpc"])]
+        if ok:
+            best = min(ok, key=lambda r: r["final_val_bpc"])
+            if best["lr"] in (rs[0]["lr"], rs[-1]["lr"]):
+                out[arm] = best["lr"]
+    return out
 
 
 def lc_change(tab, x, lo=1024, hi=16384):
@@ -231,6 +267,18 @@ def report():
                              "Before a final no-go, run tpp and ww for 2.5 h (Stage B rung) to see where it goes.")
         if q1["n"] < 2:
             flags.append(f"{basis} rests on {q1['n']} seed; treat differences below 0.05 as unresolved.")
+    # ---- what was not measured (informs; does not change the verdict) ----------------------------
+    for a, lr in lr_edges().items():
+        flags.append(f"LR: the best A1 learning rate for {a} ({lr:.1e}) is at the edge of the LRs tried, "
+                     "so its tuning may be incomplete.")
+    if not any(r40.values()):
+        flags.append("No R40 runs: the R10 → R40 trend was not measured, so the verdict rests on R10 alone.")
+    if not bpc("A3_abl", "ww_hybrid"):
+        flags.append("ww_hybrid was not run, so the hybrid route to NICHE was not evaluated.")
+    stale = current_rows("longctx.csv", ("run", "L"))[1] | current_rows("decode.csv", ("run", "context", "batch"))[1]
+    if stale:
+        flags.append(f"A5 results of {sorted(stale)} predate their re-training and were ignored: "
+                     "re-run `python -m ww.queue A5`.")
     M.update({"verdict": verdict, "Q1": Q1, "Q2": Q2, "Q3": Q3, "Q4": Q4, "reasons": reasons, "flags": flags})
 
     # ---- write the report ------------------------------------------------------------------------
@@ -288,8 +336,8 @@ def report():
         L.append(f"| {a} | {fmt(b, 4)} | {fmt(d, 3, True)} | {fmt(median_field('A3_abl', a, 'targets_per_sec'), 0)} | "
                  f"{ARMS[a]['notes']} |")
     L.append("\nSingle-seed ablation differences smaller than ±0.03 are within noise.\n")
-    L.append(f"## Long context (checkpoints from {lc_stage or '–'}, seed 0; the Transformer is scored with "
-             "strided 1024-character windows beyond 1024)\n")
+    L.append(f"## Long context (main arms: checkpoints from {lc_stage or '–'}, seed 0; ablations: A3, seed 0; "
+             "the Transformer is scored with strided 1024-character windows beyond 1024)\n")
     if lc:
         Ls = sorted({k for a in lc for k in lc[a]})
         L.append("| arm | " + " | ".join(f"BPC @ L={x}" for x in Ls) + f" | BPC at positions ≥1024 (L={Ls[-1]}) |")
@@ -301,15 +349,17 @@ def report():
                  f"{fmt(M['lc_vs_tpp'], 3, True)}, vs gdn {fmt(M['lc_vs_gdn'], 3, True)}\n")
     else:
         L.append("missing: run A5 (`python -m ww.queue A5` prints the commands)\n")
-    dec = os.path.join(RESULTS, "decode.csv")
-    if os.path.exists(dec):
+    drows, _ = current_rows("decode.csv", ("run", "context", "batch"))
+    if drows:
         L.append("## Decode (eager PyTorch, batch 1 and 8)\n")
-        with open(dec) as f:
-            drows = list(csv.DictReader(f))
-        L.append("| arm | context | batch | tok/s | peak MB | state KB/seq (as deployed) | KV KB/seq if full cache |")
-        L.append("|---|---|---|---|---|---|---|")
+        L.append("Memory: the prefill peak, what the prefill leaves behind (state or KV cache, measured), and the "
+                 "peak during the decode steps. Recurrent-only models prefill in 1024-character pieces.\n")
+        L.append("| arm | context | batch | status | tok/s | prefill peak MB | state/cache MB | decode peak MB | "
+                 "state KB/seq (as deployed) | KV KB/seq if full cache |")
+        L.append("|---|---|---|---|---|---|---|---|---|---|")
         for r in drows:
-            L.append(f"| {r['arm']} | {r['context']} | {r['batch']} | {r['tok_per_s']} | {r['peak_mem_mb']} | "
+            L.append(f"| {r['arm']} | {r['context']} | {r['batch']} | {r.get('status') or 'ok'} | {r['tok_per_s']} | "
+                     f"{r.get('prefill_peak_mem_mb', '')} | {r.get('state_mem_mb', '')} | {r['peak_mem_mb']} | "
                      f"{r['state_kb_per_seq_windowed']} | {r['state_kb_per_seq_fullkv']} |")
         L.append("")
     L.append("## LR sweep (A1, u4096, seed 0)\n")
@@ -331,7 +381,11 @@ def report():
     L.append("- LR was tuned at u4096 and transferred; β2, batch size, warmup and the optimizer were not tuned.")
     L.append("- Wall-clock compares implementations, not just architectures: tpp uses fused SDPA, gdn uses fla "
              "Triton kernels, ww uses plain PyTorch ops. Per-token numbers are the architecture comparison.")
-    L.append("- Ablation LRs are inherited from ww; any ablation that beat ww got a second seed (A3b).")
+    L.append("- Ablation LRs are inherited from ww (deltanet: from gdn); ablations have one seed unless A3b ran.")
+    L.append("- gdn reaches the ±3% parameter match with FFN hidden 640 instead of 704 (its mixer has more "
+             "parameters than attention).")
+    L.append("- The LR was chosen on the same validation set that is reported here (one choice among 5–7 LRs per "
+             "arm, the same for every arm); the selection bias is far below seed noise.")
     with open(os.path.join(RESULTS, "GATE_REPORT.md"), "w") as f:
         f.write("\n".join(L) + "\n")
 

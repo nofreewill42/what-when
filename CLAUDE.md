@@ -40,6 +40,7 @@ python -m ww.arms --check --device cuda         # parameter counts, ±3% check, 
 python -m ww.bench train --arms tpp,gdn,ww      # throughput, picks micro-batch -> results/micro_batch.json
 python -m ww.queue plan                         # what is done, what is left, GPU-hours estimate
 python -m ww.queue A1                           # run a stage (A0 A1 A2 A3 A3b A4 A4b A5 A6)
+python -m ww.queue A3 --only deltanet,ww_v8     # part of a stage; --force ARM:SEED re-trains one run
 python -m ww.gate select-lr | early | report    # LR choice after A1, E1 after A2, G1 at the end
 python -m ww.plots                              # figures into results/figures/
 ```
