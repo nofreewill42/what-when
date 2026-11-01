@@ -1,0 +1,64 @@
+{
+  "arm": "ww_noffn",
+  "model": {
+    "vocab": 128,
+    "d_model": 256,
+    "n_layers": 4,
+    "layers": [
+      "ww",
+      "ww",
+      "ww",
+      "ww"
+    ],
+    "ffn": "none",
+    "ffn_hidden": 704,
+    "tie_embeddings": false,
+    "attn": {
+      "n_heads": 4,
+      "rope_base": 10000.0,
+      "qk_norm": true,
+      "window": null
+    },
+    "swa": {
+      "window": 256
+    },
+    "ww": {
+      "n_heads": 384,
+      "value_dim": 1,
+      "R": 2,
+      "chunk": 32,
+      "what": "learned",
+      "when": "learned",
+      "decay": false,
+      "tick_param": "softplus"
+    },
+    "fla": {
+      "n_heads": 4,
+      "head_dim": 64,
+      "expand_v": 1.0,
+      "use_gate": true,
+      "conv_size": 4
+    }
+  },
+  "train": {
+    "optimizer": "adamw",
+    "lr": null,
+    "betas": [
+      0.9,
+      0.95
+    ],
+    "eps": 1e-08,
+    "weight_decay": 0.1,
+    "grad_clip": 1.0,
+    "schedule": "wsd",
+    "warmup_frac": 0.02,
+    "cooldown_frac": 0.2,
+    "targets_per_update": 65536,
+    "seq_len": 1024,
+    "micro_batch": 16
+  },
+  "notes": "Banked design inside the harness: no FFN, H=384 heads to match params.",
+  "lr_from": "ww",
+  "param_match": true,
+  "gpu_only": false
+}

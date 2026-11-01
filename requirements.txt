@@ -1,0 +1,4 @@
+torch>=2.4            # with CUDA; the owner's machine has 2.8 + Triton 3.4
+numpy
+matplotlib
+flash-linear-attention  # GatedDeltaNet / DeltaNet layers (fla.layers); GPU only
