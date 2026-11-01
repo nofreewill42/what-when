@@ -80,3 +80,37 @@ Format:
   training schedule draws each update's 64 sequences from a single book.
 - Allowed by: PLAN.md §4 A0.7. ~18 min GPU.
 - Affected runs: none.
+
+## 2026-11-01 — A0.7 last diagnostic (old data order + old init)
+- Result: 2.0231 BPC (8,192 updates, outside the ledger). Summary of the four runs of the anchor recipe:
+  new harness 1.8147 · + old residual init 1.8263 · + old data order 2.0321 · + old order and old init 2.0231 ·
+  old code 1.9702. The data order explains ~0.2 BPC; the remaining ~0.05 between the old code and the new harness
+  under the old order is within the swing of single-book batches (train BPC 1.99 -> 2.06 over the last 512 updates)
+  and possibly the weight-decay grouping (old: wd on all parameters). Not investigated further.
+- Allowed by: PLAN.md §4 A0.7. Affected runs: none.
+
+## 2026-11-01 — Amendment 1 (owner, before A1): see PLAN.md §10
+- What changed: (1) commit + push after every stage, `git pull --rebase` before each (CLAUDE.md updated);
+  (2) anchor accepted as an explained offset, caution added to PLAN §1, §6 predictions untouched;
+  (3) Stage A cut to A1 -> deltanet + ww_v8 at R10 seed 0 (A3_abl) -> A2 -> E1 -> A5 on A2 seed-0 checkpoints ->
+  gate report from R10, then stop; A4, A4b, A6, other A3 ablations, A3b and the fused kernel deferred;
+  (4) Q4 at chunk 32 (`ww/gate.py`: `Q4_CHUNK`, `analytic_flop_ratio`, a chunk 16/32/64 table in the report; test
+  added to `tests/test_gate_logic.py`); (5) ww `in_proj` in fp32 (below); (6) report to the owner after A1, A2/E1, G1.
+- Why: A0.8 projected 108 GPU-h (> 36); Q4 would otherwise depend on the runtime chunk; bf16 control rounding.
+- Allowed by: owner, 2026-11-01, before A1.
+- Affected runs: none (no A1 run exists). The A0 anchor (tpp_legacy) has no WHAT×WHEN layer, so item 5 does not affect it.
+
+## 2026-11-01 — Amendment 1 item 5: ww control projection in fp32 — check result
+- What changed: `WhatWhenMixer.forward` computes `ctrl = F.linear(x.float(), in_proj.weight.float())` with autocast off.
+- Check: all tests pass. ww 1,985 -> 2,056 ms/update (+3.6%, below the 10% ask threshold); ww_v8 unchanged.
+  **The bf16 noise floor did not drop** (max |Δlogit| from batch slicing 0.135 before, 0.135 after; tpp 0.008).
+- Why it did not drop (measured, layer 0, fp32): the control projection differs by 8e-7 between batch shapes (normal
+  GEMM rounding); after the features the keys differ by 8e-6 and queries by 2e-5; the recurrence adds nothing
+  (a 1e-7 key perturbation moves its output by 4e-7; the fp32 token-by-token core is as far from fp64 as the chunked
+  one, 4.6e-4 vs 3.1e-4 in the logits). The amplifier is the WHEN clock: phase = cumulative sum of ticks, so tick
+  errors integrate along the sequence and enter the features at harmonics 1 and 2. Clamping the WHAT radius changes
+  nothing (min radius 8e-3, median 0.38). With item 5, layer 0's ticks are fp32-exact, but layers 1-3 read a residual
+  stream that already carries bf16 rounding from the FFN / output projections, which then integrates the same way.
+- Size of the effect: at T=1024, B=8, mean |Δlogit| ww 2.3e-3 vs tpp 1.1e-3 and the loss changes by 6e-5 nats
+  (tpp 3e-6), so it is not expected to matter for BPC; it is a property of the design (integrated clock), not a bug.
+- Affected runs: none.

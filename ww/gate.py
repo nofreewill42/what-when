@@ -30,6 +30,8 @@ THRESH = {
     "early_gdn": 0.15,   # ... and behind gdn by more than this -> recommend stopping early
     "trend": 0.04,       # gap shrinking from R10 to R40 by more than this is flagged
 }
+Q4_CHUNK = 32  # Amendment 1 item 4: Q4 uses the analytic FLOPs at the preregistered chunk 32 (runtime uses 64)
+Q4_SHOW_CHUNKS = (16, 32, 64)
 T_CRIT = {1: 12.71, 2: 4.30, 3: 3.18, 4: 2.78, 5: 2.57, 6: 2.45, 7: 2.36, 8: 2.31, 9: 2.26}
 
 
@@ -70,6 +72,18 @@ def paired(a: dict, b: dict):
     sd = statistics.stdev(d) if len(d) > 1 else float("nan")
     half = T_CRIT.get(len(d) - 1, 2.0) * sd / math.sqrt(len(d)) if len(d) > 1 else float("nan")
     return {"n": len(d), "mean": mean, "sd": sd, "ci95": (mean - half, mean + half), "diffs": d, "seeds": seeds}
+
+
+def analytic_flop_ratio(chunk: int, arm: str = "ww", ref: str = "tpp") -> float:
+    """Analytic training FLOPs/token of `arm` with its WHAT×WHEN chunk set to `chunk`, divided by `ref`'s
+    (built from the arm configs on CPU; the chunked form computes the same function at every chunk size)."""
+    import copy
+
+    from ww.model import LM, train_flops_per_token
+    cfg = copy.deepcopy(ARMS[arm]["model"])
+    cfg["ww"]["chunk"] = chunk
+    T = ARMS[arm]["train"]["seq_len"]
+    return train_flops_per_token(LM(cfg), T) / train_flops_per_token(LM(ARMS[ref]["model"]), T)
 
 
 def fmt(x, nd=3, signed=False):
@@ -188,14 +202,16 @@ def report():
         lc_t, lc_g = M["lc_vs_tpp"], M["lc_vs_gdn"]
         Q3 = None if lc_t is None else ("ADVANTAGE" if (lc_t <= -THRESH["lc"] and lc_g is not None
                                                         and lc_g <= -THRESH["lc"]) else "NONE")
-        flop_ratio = (gfl["ww"] / gfl["tpp"]) if gfl.get("ww") and gfl.get("tpp") else None
-        Q4 = None if flop_ratio is None else ("PLAUSIBLE" if flop_ratio <= THRESH["flop_ratio"] else "HARD")
+        flop_ratio = analytic_flop_ratio(Q4_CHUNK)
+        Q4 = "PLAUSIBLE" if flop_ratio <= THRESH["flop_ratio"] else "HARD"
         M["flop_ratio"] = flop_ratio
+        M["flop_ratio_by_chunk"] = {c: analytic_flop_ratio(c) for c in Q4_SHOW_CHUNKS}
         reasons.append(f"Q1 per-token vs Transformer++ ({basis}): ww - tpp = {q1['mean']:+.3f} -> {Q1}")
         reasons.append(f"Q2 per-token vs Gated DeltaNet ({basis}): ww - gdn = {q2['mean']:+.3f} -> {Q2}")
         reasons.append(f"Q3 long context (gap change 1k->16k): vs tpp {fmt(lc_t, signed=True)}, "
                        f"vs gdn {fmt(lc_g, signed=True)} -> {Q3 or 'missing'}")
-        reasons.append(f"Q4 speed headroom: ww/tpp training FLOPs per token = {fmt(flop_ratio, 2)} -> {Q4 or 'missing'}"
+        reasons.append(f"Q4 speed headroom: ww/tpp analytic training FLOPs per token at chunk {Q4_CHUNK} = "
+                       f"{fmt(flop_ratio, 2)} -> {Q4 or 'missing'}"
                        f"; measured throughput ratio = {fmt((thr['ww'] or 0) / thr['tpp'], 2) if thr.get('tpp') else '–'}")
         hyb = paired(bpc("A3_abl", "ww_hybrid"), r10["tpp"])
         if Q1 in ("STRONG", "MODERATE") and Q2 in ("BETTER", "TIE") and Q4 == "PLAUSIBLE":
@@ -249,6 +265,19 @@ def report():
                        ("r40_ww_gdn", "R40 ww − gdn")):
         L.append(f"- {label}: {fmt_pair(M[key])}")
     L.append("")
+    if M.get("flop_ratio_by_chunk"):
+        L.append("## Q4: analytic training FLOPs per token, ww ÷ tpp\n")
+        L.append(f"Q4 is decided at chunk {Q4_CHUNK} (Amendment 1); training runs use chunk "
+                 f"{ARMS['ww']['model']['ww']['chunk']} (the same function, faster in plain PyTorch). The chunked "
+                 "form's FLOPs grow with the chunk; the token-by-token recurrence itself needs ~4·K·V per head.\n")
+        L.append("| chunk | analytic FLOP ratio ww/tpp |")
+        L.append("|---|---|")
+        for c, r in M["flop_ratio_by_chunk"].items():
+            L.append(f"| {c}{' (Q4)' if c == Q4_CHUNK else ''} | {r:.2f} |")
+        tr = (thr["ww"] / thr["tpp"]) if thr.get("ww") and thr.get("tpp") else None
+        L.append(f"\nMeasured training throughput ratio ww/tpp (R10 runs, chunk "
+                 f"{ARMS['ww']['model']['ww']['chunk']}): {fmt(tr, 3)} (i.e. ww is "
+                 f"{fmt(1 / tr if tr else None, 1)}x slower per target).\n")
     L.append("## Ablations at R10 (seed 0, LR inherited from ww; Δ = arm − ww, negative = better than ww)\n")
     ref = r10["ww"].get(0)
     L.append("| arm | BPC | Δ vs ww | targets/s | what it tests |")

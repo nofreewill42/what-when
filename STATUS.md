@@ -12,15 +12,17 @@ for anything worth knowing later. Current step is in bold._
 - [x] A0.5 legacy semantics check: new head recurrence == old one on identical controls (rel 2.5e-7)
 - [x] A0.6 throughput measured, micro-batches chosen (`results/throughput.csv`, `results/micro_batch.json`), ww chunk 64
 - [x] A0.7 anchor: **1.8147**, not 1.970 ± 0.05 — offset explained (old data order: one book per batch), see log
-- [ ] **A0.8** `ww.queue plan` = **108 GPU-h** without A4b (> 36) — **STOPPED, waiting for the owner's decision**
-- [ ] A1 LR sweep done, `results/lr_choice.json` has tpp, gdn, ww (edge rule applied)
+- [x] A0.8 `ww.queue plan` = 108 GPU-h without A4b (> 36) — owner decided **Amendment 1** (PLAN §10): cut plan below
+- [x] Amendment 1 items 1, 2, 4, 5 done (push, anchor note, Q4 at chunk 32, ww in_proj fp32: +3.6% time, noise floor unchanged)
+- [ ] **A1** LR sweep done, `results/lr_choice.json` has tpp, gdn, ww (edge rule applied)
+- [ ] A3 (Amendment 1): `deltanet`, `ww_v8` at R10 seed 0
 - [ ] A2 R10 done (3 arms × 3 seeds)
 - [ ] E1 early-exit check run — result: ______ — **report to owner**
-- [ ] A4 R40 done (3 arms, seed 0)   ·   [ ] A4b optional (tpp, ww seed 1)
-- [ ] A6 iso-time done (600 s, 2400 s)
-- [ ] A5 long-context + decode evaluation done, figures made
-- [ ] A3 ablations done, A3b promotions done, A5 re-run for new checkpoints
-- [ ] **G1** `results/GATE_REPORT.md` written and committed — verdict: ______ — **report to owner, stop**
+- [—] A4 R40, A4b — deferred (Amendment 1)
+- [—] A6 iso-time — deferred (Amendment 1)
+- [ ] A5 long-context + decode on the A2 seed-0 checkpoints, figures made
+- [—] other A3 ablations, A3b — deferred (Amendment 1)
+- [ ] **G1** (from R10) `results/GATE_REPORT.md` written and committed — verdict: ______ — **report to owner, stop**
 
 ## Measured so far
 
@@ -56,3 +58,4 @@ for anything worth knowing later. Current step is in bold._
 - 2026-11-01 — Q4 caution for the owner: analytic ww FLOPs/token depend on the chunk size (chunk overhead dominates:
   the recurrence itself is ~4KV per head). ww/tpp = 1.16 at chunk 32 but 1.51 at chunk 64, which crosses the 1.5
   threshold. Owner to decide how Q4 is measured before G1.
+- 2026-11-01 — Amendment 1 recorded (PLAN §10). ww throughput with fp32 in_proj: 31,874 targets/s (2,056 ms/update).

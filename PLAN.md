@@ -64,6 +64,12 @@ What these numbers say:
   read (+0.10 to +0.30 BPC, replicated). In a residual stack this happens automatically: layer k+1 reads what layer k
   wrote into the residual stream.
 
+**Caution (added by Amendment 1, 2026-11-01):** every old-project number above comes from a data order in which
+all 64 sequences of each update were drawn from *one book* (A0.7: 1,373 of 28,595 books seen in 8,192 updates).
+That handicapped the old runs by roughly 0.2 BPC (the old D256/L2 anchor recipe: 1.970 there, 1.815 in this harness),
+and the handicap is not necessarily equal for WHAT×WHEN and the Transformer. The old numbers are context only; they
+are not comparable with Stage A results, and no conclusion here rests on them.
+
 What was **never** done: tuning the learning rate for either family (3e-4 throughout); comparing in a shared backbone;
 a Gated DeltaNet baseline; long-context evaluation; a forget gate; vector payload (V>1) trained for quality; a GPU
 chunkwise kernel. This study does the first five in a quick-and-dirty way and replaces the sixth with an exact
@@ -344,3 +350,27 @@ were superseded.
 The research report that chose these baselines (Transformer++ with WSD and equal-budget tuning as the primary
 baseline, Gated DeltaNet as the recurrent reference, mixer-swap design, WSD cooldown 20%) is summarised in
 `docs/BASELINE_RESEARCH.md`.
+
+---
+
+## 10. Amendment 1 (before A1, 2026-11-01, owner decision after A0)
+
+Made before any WHAT×WHEN-versus-baseline result existed, using only the A0 calibration (STATUS.md). Each item is
+also logged in DEVIATIONS.md. The §6 predictions are unchanged.
+
+1. **Git:** commit **and push** after every stage; `git pull --rebase` before each stage (an independent code review
+   may push fixes; a fix that changes training or evaluation follows §7).
+2. **Anchor (A0.7):** 1.8147 vs the old 1.970 is accepted as an explained offset (old one-book-per-batch data order;
+   see the caution in §1 and DEVIATIONS.md).
+3. **Budget (A0.8 measured 108 GPU-h > 36):** Stage A is cut to
+   A1 → (`deltanet` and `ww_v8` at R10 seed 0, stage `A3_abl`) → A2 → E1 → A5 on the A2 seed-0 checkpoints →
+   `python -m ww.gate report` from R10 → **stop and report, whatever E1 says.**
+   Deferred (not cancelled): A4, A4b, A6, the other A3 ablations, A3b, the fused kernel. G1 is therefore decided on
+   R10 (3 seeds), and the report's Q2/Q1 basis says "R10".
+4. **Q4:** the analytic FLOP ratio is computed at **chunk 32** (the preregistered setting) by `ww.gate`;
+   training keeps chunk 64 as the runtime choice (same function). GATE_REPORT.md shows the ratio at chunks
+   16 / 32 / 64 (0.996 / 1.156 / 1.510) next to the measured throughput ratio.
+5. **WHAT×WHEN control projection in fp32:** `in_proj` runs with autocast off in fp32, like the memory core.
+   (Result of the check: tests pass, ww 3.6% slower; the bf16 noise floor did *not* drop — see DEVIATIONS.md.)
+6. **Reporting:** after A1, after A2/E1 and at the end, push and send the owner each arm's best LR and BPC, grid-edge
+   flags, hours left, and finally the verdict.

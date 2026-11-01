@@ -87,5 +87,7 @@ runs/                checkpoints and logs (git-ignored)
 
 ## Commit discipline
 
-Commit after each stage: `results/*.csv`, `results/*.json`, `results/GATE_REPORT.md`, `results/figures/`,
-`STATUS.md`, `DEVIATIONS.md`. Never commit `runs/` (checkpoints) or data.
+Run `git pull --rebase` before each stage (an independent code review may push fixes; if a fix changes training or
+evaluation, follow PLAN §7). Commit **and push** after each stage: `results/*.csv`, `results/*.json`,
+`results/GATE_REPORT.md`, `results/figures/`, `STATUS.md`, `DEVIATIONS.md` (and any code change). Never commit `runs/`
+(checkpoints) or data. (Amendment 1, PLAN §10.)

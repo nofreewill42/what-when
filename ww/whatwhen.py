@@ -271,9 +271,11 @@ class WhatWhenMixer(nn.Module):
         """x: [B, T, d]. state: None or {"M": [B,H,K,V] fp32, "clock": [B,H] fp64}."""
         B, T, _ = x.shape
         H, V = self.n_heads, self.value_dim
-        ctrl = self.in_proj(x)
         with torch.autocast(device_type=x.device.type, enabled=False):
-            ctrl = ctrl.to(self.core_dtype).view(B, T, H, self.n_ctrl)
+            # the control projection runs in fp32 too (Amendment 1, item 5): angles and clock ticks come
+            # from it, and bf16 rounding of (kx, ky) / ticks was amplified ~16x in the logits (A0.4)
+            ctrl = F.linear(x.to(self.core_dtype), self.in_proj.weight.to(self.core_dtype))
+            ctrl = ctrl.view(B, T, H, self.n_ctrl)
             clock0 = None if state is None else state["clock"]
             M0 = None if state is None else state["M"]
             k, q, v, log_alpha, clock_T = self._features(ctrl, clock0)

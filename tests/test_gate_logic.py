@@ -58,6 +58,10 @@ def main():
         write_scenario(d, {**base10, "ww": [1.93, 1.94, 1.92]}, {"tpp": 1.72, "gdn": 1.74, "ww": 1.74})
         M = verdict(d)
         assert M["verdict"] == "GO" and M["Q1"] == "STRONG" and M["Q2"] == "TIE", M
+        # Amendment 1 item 4: Q4 uses the analytic ratio at chunk 32, not the ledger's (runtime chunk) GFLOP
+        assert abs(M["flop_ratio"] - gate.analytic_flop_ratio(32)) < 1e-12 and M["Q4"] == "PLAUSIBLE", M
+        assert set(M["flop_ratio_by_chunk"]) == {16, 32, 64}
+        assert M["flop_ratio_by_chunk"][16] < M["flop_ratio_by_chunk"][32] < M["flop_ratio_by_chunk"][64]
 
         d = os.path.join(root, "nogo")
         write_scenario(d, {**base10, "ww": [2.05, 2.06, 2.04]}, {"tpp": 1.72, "gdn": 1.74, "ww": 1.87})
