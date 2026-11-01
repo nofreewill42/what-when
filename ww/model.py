@@ -311,6 +311,16 @@ def decay_param_groups(model: LM, weight_decay: float):
     return [{"params": decay, "weight_decay": weight_decay}, {"params": no_decay, "weight_decay": 0.0}]
 
 
+def ww_core_flops_per_head(C: int, K: int, V: int, solve: bool = True) -> float:
+    """Forward FLOPs per token per head of ww_chunked (matches torch's FlopCounterMode on the matmuls,
+    tests/test_model.py). Per token: Gram matrices KK^T, QK^T 4CK; W = Tinv Kg, U0 = Tinv v 2C(K+V);
+    trans = Kt^T W, inject = Kt^T U0 2K(K+V); state hand-off trans @ M 2K^2 V / C; outputs
+    u = U0 - W M, Q M 4KV, P u 2CV; plus the unit-triangular inverse C^2/3 (intrinsic cost, C^3/3 per
+    chunk; torch's generic solve does more and is not counted by FlopCounterMode)."""
+    f = 4 * C * K + 2 * C * (K + V) + 2 * K * (K + V) + 2 * K * K * V / C + 4 * K * V + 2 * C * V
+    return f + (C * C / 3 if solve else 0.0)
+
+
 def train_flops_per_token(model: LM, seq_len: int) -> float:
     """Rough analytic training FLOPs per token (forward x 3). Matmul params: 6 per param.
     attention adds 6 * T * d per layer (causal average); WHAT×WHEN adds its chunked-core cost;
@@ -325,10 +335,7 @@ def train_flops_per_token(model: LM, seq_len: int) -> float:
             ctx_avg = seq_len / 2 if (w is None or w >= seq_len) else w  # keys seen per query
             flops += 3.0 * 4.0 * ctx_avg * m.h * m.hd  # QK^T and AV, forward x 3
         elif isinstance(m, WhatWhenMixer):
-            C, K, V = m.chunk, m.K, m.value_dim
-            # Gram matrices 2*C*K, solve C*C/3, W/U0 2*C*(K+V), trans/inject 2*K*(K+V), outputs 2*(K*V+C*V)
-            per_head = 2 * 2 * C * K + C * C / 3 + 2 * C * (K + V) + 2 * K * (K + V) + 2 * (K * V + C * V)
-            flops += 3.0 * per_head * m.n_heads
+            flops += 3.0 * ww_core_flops_per_head(m.chunk, m.K, m.value_dim) * m.n_heads
         elif isinstance(m, FLAMixer):
             dv = m.head_dim * m.expand_v
             flops += 3.0 * m.n_heads * (4 * 64 * (m.head_dim + dv) + 4 * m.head_dim * dv)

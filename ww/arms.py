@@ -24,7 +24,7 @@ BASE_MODEL = {
     "tie_embeddings": False,
     "attn": {"n_heads": 4, "rope_base": 10000.0, "qk_norm": True, "window": None},
     "swa": {"window": 256},
-    "ww": {"n_heads": 128, "value_dim": 1, "R": 2, "chunk": 32, "what": "learned", "when": "learned",
+    "ww": {"n_heads": 128, "value_dim": 1, "R": 2, "chunk": 64, "what": "learned", "when": "learned",
            "decay": False, "tick_param": "softplus"},
     "fla": {"n_heads": 4, "head_dim": 64, "expand_v": 1.0, "use_gate": True, "conv_size": 4},
 }
@@ -64,8 +64,9 @@ A, W, G = "attn", "ww", "gdn"
 ARMS = {
     # --- main arms -------------------------------------------------------------------------
     "tpp": _arm([A] * 4, "Transformer++ (primary baseline): RoPE, QK-norm, SwiGLU, untied, AdamW+WSD."),
-    "gdn": _arm([G] * 4, "Gated DeltaNet (fla) in the same backbone: the mature delta-rule reference.",
-                gpu_only=True),
+    "gdn": _arm([G] * 4, "Gated DeltaNet (fla) in the same backbone: the mature delta-rule reference. "
+                "FFN hidden 640 (not 704) to stay within +-3% params (A0.4).",
+                gpu_only=True, model={"ffn_hidden": 640}),
     "ww": _arm([W] * 4, "WHAT×WHEN mixer in the same backbone (headline arm). H=128, V=1, beta=1."),
     # --- secondary reference -----------------------------------------------------------------
     "deltanet": _arm(["deltanet"] * 4, "DeltaNet (fla), ungated: WHAT×WHEN's closest published relative.",
@@ -88,11 +89,11 @@ ARMS = {
     "ww_hybrid": _arm([W, W, "swa", W], "Hybrid: layer 3 of 4 is sliding-window attention (window 256).",
                       lr_from="ww"),
     # --- harness anchor (reproduces an old local number; not part of the comparison) ---------
-    "tpp_legacy": _arm([A] * 2, "Old local recipe D256/L2: lr 3e-4, betas (0.9, 0.999), wd 0.01, cosine. "
-                       "Expected ~1.970 BPC at u8192 if the new harness matches the old one. A0 must "
-                       "copy the exact old FFN kind/width from the old project before running.",
+    "tpp_legacy": _arm([A] * 2, "Old local recipe D256/L2 (budget_grid_v1 tr_d256_l2_swiglu_h672, seed 0: "
+                       "1.9702 BPC at u8192): SwiGLU 672, no QK-norm, lr 3e-4, betas (0.9, 0.999), wd 0.01, "
+                       "2% warmup + cosine. 1,623,296 params, as the old arm.",
                        param_match=False,
-                       model={"ffn": "relu", "ffn_hidden": 1024, "attn": {"qk_norm": False}},
+                       model={"ffn": "swiglu", "ffn_hidden": 672, "attn": {"qk_norm": False}},
                        train={"lr": 3e-4, "betas": [0.9, 0.999], "weight_decay": 0.01,
                               "schedule": "cosine"}),
 }

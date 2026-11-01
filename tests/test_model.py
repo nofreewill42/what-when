@@ -140,6 +140,25 @@ def test_strided_eval_gives_fresh_training_length_context():
     assert plain.shape == (T,)
 
 
+def test_ww_flop_formula_matches_flop_counter():
+    """The analytic WHAT×WHEN core FLOPs (used by gate Q4) equal torch's count of the executed matmuls."""
+    from torch.utils.flop_counter import FlopCounterMode
+
+    from ww.model import ww_core_flops_per_head
+    from ww.whatwhen import ww_chunked
+    for C, K, V in ((32, 25, 1), (16, 25, 8), (64, 9, 1)):
+        T = 8 * C
+        k = torch.randn(1, 1, T, K, dtype=torch.float64)
+        k = k / k.norm(dim=-1, keepdim=True)
+        q = torch.randn(1, 1, T, K, dtype=torch.float64)
+        v = torch.randn(1, 1, T, V, dtype=torch.float64)
+        with FlopCounterMode(display=False) as fc:
+            ww_chunked(k, q, v, chunk=C)
+        counted = fc.get_total_flops() / T
+        analytic = ww_core_flops_per_head(C, K, V, solve=False)
+        assert abs(counted / analytic - 1) < 1e-6, (C, K, V, counted, analytic)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

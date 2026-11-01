@@ -26,7 +26,7 @@
       "n_heads": 128,
       "value_dim": 1,
       "R": 2,
-      "chunk": 32,
+      "chunk": 64,
       "what": "learned",
       "when": "none",
       "decay": false,

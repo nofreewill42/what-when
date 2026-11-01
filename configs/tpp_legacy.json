@@ -8,8 +8,8 @@
       "attn",
       "attn"
     ],
-    "ffn": "relu",
-    "ffn_hidden": 1024,
+    "ffn": "swiglu",
+    "ffn_hidden": 672,
     "tie_embeddings": false,
     "attn": {
       "n_heads": 4,
@@ -24,7 +24,7 @@
       "n_heads": 128,
       "value_dim": 1,
       "R": 2,
-      "chunk": 32,
+      "chunk": 64,
       "what": "learned",
       "when": "learned",
       "decay": false,
@@ -55,7 +55,7 @@
     "seq_len": 1024,
     "micro_batch": 16
   },
-  "notes": "Old local recipe D256/L2: lr 3e-4, betas (0.9, 0.999), wd 0.01, cosine. Expected ~1.970 BPC at u8192 if the new harness matches the old one. A0 must copy the exact old FFN kind/width from the old project before running.",
+  "notes": "Old local recipe D256/L2 (budget_grid_v1 tr_d256_l2_swiglu_h672, seed 0: 1.9702 BPC at u8192): SwiGLU 672, no QK-norm, lr 3e-4, betas (0.9, 0.999), wd 0.01, 2% warmup + cosine. 1,623,296 params, as the old arm.",
   "lr_from": null,
   "param_match": false,
   "gpu_only": false

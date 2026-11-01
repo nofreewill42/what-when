@@ -77,7 +77,27 @@ def test_one_bf16_update_per_main_arm_at_full_size():
         torch.cuda.empty_cache()
 
 
+def _decode_vs_full(model, x, amp):
+    """(max |decode - full forward|, max |full forward of batch row 0 alone - row 0 of the batch|).
+    The second number is the model's own numerical noise floor for re-running identical math."""
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16, enabled=amp):
+        full, _ = model(x)
+        logits, st = model(x[:, :200], want_state=True)
+        outs = [logits]
+        for t in range(200, 300):
+            lt, st = model(x[:, t:t + 1], states=st, want_state=True)
+            outs.append(lt)
+        alone, _ = model(x[:1])
+    diff = (torch.cat(outs, 1).float() - full.float()).abs().max().item()
+    noise = (alone.float() - full[:1].float()).abs().max().item()
+    return diff, noise
+
+
 def test_bf16_decode_close_to_full_forward():
+    # fp32: decode must equal the full forward to numerical precision (the real correctness check).
+    # bf16: WHAT×WHEN normalises (kx, ky) pairs to angles, which amplifies bf16 rounding of its
+    # control projections (A0.4, 2026-11-01: batch-slicing alone moves ww logits by ~0.13 vs ~0.008
+    # for tpp), so bf16 decode is compared with the model's own bf16 noise floor, not a fixed 0.1.
     for arm in ("tpp", "ww"):
         torch.manual_seed(0)
         model = LM(ARMS[arm]["model"]).to(DEV).eval()
@@ -85,16 +105,12 @@ def test_bf16_decode_close_to_full_forward():
             if getattr(m, "is_residual_out", False):
                 torch.nn.init.normal_(m.weight, std=0.02)
         x = torch.randint(0, 128, (2, 300), device=DEV)
-        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-            full, _ = model(x)
-            logits, st = model(x[:, :200], want_state=True)
-            outs = [logits]
-            for t in range(200, 300):
-                lt, st = model(x[:, t:t + 1], states=st, want_state=True)
-                outs.append(lt)
-        diff = (torch.cat(outs, 1).float() - full.float()).abs().max().item()
-        assert diff < 0.1, f"{arm}: decode differs from full forward by {diff}"
-        print(f"  {arm}: decode vs full forward max |dlogit| = {diff:.1e} (bf16)")
+        d32, n32 = _decode_vs_full(model, x, amp=False)
+        assert d32 < 1e-3, f"{arm}: fp32 decode differs from full forward by {d32}"
+        d16, n16 = _decode_vs_full(model, x, amp=True)
+        assert d16 < max(0.1, 2.0 * n16), f"{arm}: bf16 decode diff {d16} vs noise floor {n16}"
+        print(f"  {arm}: decode vs full forward max |dlogit| fp32 {d32:.1e} (noise {n32:.1e}), "
+              f"bf16 {d16:.1e} (noise {n16:.1e})")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,15 @@
+{
+ "tpp": 64,
+ "gdn": 64,
+ "ww": 16,
+ "deltanet": 64,
+ "ww_noffn": 4,
+ "ww_wide": 8,
+ "ww_decay": 8,
+ "ww_v8": 32,
+ "ww_hybrid": 8,
+ "ww_nowhen": 16,
+ "ww_constclock": 16,
+ "ww_nowhat": 16,
+ "tpp_legacy": 64
+}

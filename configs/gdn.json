@@ -11,7 +11,7 @@
       "gdn"
     ],
     "ffn": "swiglu",
-    "ffn_hidden": 704,
+    "ffn_hidden": 640,
     "tie_embeddings": false,
     "attn": {
       "n_heads": 4,
@@ -26,7 +26,7 @@
       "n_heads": 128,
       "value_dim": 1,
       "R": 2,
-      "chunk": 32,
+      "chunk": 64,
       "what": "learned",
       "when": "learned",
       "decay": false,
@@ -57,7 +57,7 @@
     "seq_len": 1024,
     "micro_batch": 16
   },
-  "notes": "Gated DeltaNet (fla) in the same backbone: the mature delta-rule reference.",
+  "notes": "Gated DeltaNet (fla) in the same backbone: the mature delta-rule reference. FFN hidden 640 (not 704) to stay within +-3% params (A0.4).",
   "lr_from": null,
   "param_match": true,
   "gpu_only": true
