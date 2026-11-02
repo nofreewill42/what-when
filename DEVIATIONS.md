@@ -114,3 +114,21 @@ Format:
 - Size of the effect: at T=1024, B=8, mean |Δlogit| ww 2.3e-3 vs tpp 1.1e-3 and the loss changes by 6e-5 nats
   (tpp 3e-6), so it is not expected to matter for BPC; it is a property of the design (integrated clock), not a bug.
 - Affected runs: none.
+
+## 2026-11-02 — Review fixes pulled during A1 (`31a35b8`, `e2e83e1`); gdn A1 sweep re-run
+- What changed: the independent review's fixes arrived after A1 had started (pull before the next stage). The one that
+  changes training is finding 10: fla short-conv weights now get N(0, 0.02) (`LM.reset_parameters`). The 5 gdn A1 runs
+  (u4096, lr 5e-4..8e-3) were trained with PyTorch's default conv init.
+- Action: stopped the old `ww.queue A1` parent process (the running ww lr8e-3 run continued untouched) so it would not
+  start gdn's edge run with mixed code; re-run `python -m ww.queue A1 --only gdn --force gdn:0` (+ edge extensions) after
+  the tests pass, then `select-lr`. The old gdn rows stay in the ledger; the latest row per run wins (`e2e83e1`).
+- Old-init gdn results, for the record (final val BPC): 5e-4 1.6393, 1e-3 1.6218, 2e-3 1.6125, 4e-3 1.6084, 8e-3 1.5934.
+- Allowed by: PLAN §7 (bug fix, logged) and Amendment 1 item 1; the review document prescribes this re-run.
+- Affected runs: gdn A1 only. tpp and ww A1 runs have no Conv1d.
+
+## 2026-11-02 — Amendment 2 (owner, during A1): A2 seed 0 only — see PLAN.md §11
+- What changed: A2 seeds 1 and 2 not run (deferred). Order: A1 -> A3_abl deltanet, ww_v8 -> A2 seed 0 -> A5 -> gate.
+  A2 seed 0 is launched with `ww.train` using exactly the commands `ww.queue A2 --dry_run` prints for seed 0.
+- Why: owner, after seeing the A1 sweep: GO unlikely (ww − gdn ≈ +0.12 vs the +0.03 line), Q3 is the open question.
+- Allowed by: owner, 2026-11-02 ("go with the a5 only" + "and the deltanet + ww_v8").
+- Affected runs: none re-run; G1's Q1/Q2 are single-seed and E1 cannot apply its every-seed rule.

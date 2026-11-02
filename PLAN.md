@@ -374,3 +374,18 @@ also logged in DEVIATIONS.md. The §6 predictions are unchanged.
    (Result of the check: tests pass, ww 3.6% slower; the bf16 noise floor did *not* drop — see DEVIATIONS.md.)
 6. **Reporting:** after A1, after A2/E1 and at the end, push and send the owner each arm's best LR and BPC, grid-edge
    flags, hours left, and finally the verdict.
+
+## 11. Amendment 2 (during A1, 2026-11-02, owner decision)
+
+Made after the A1 sweep points for tpp, gdn and ww (lr ≤ 4e-3) were known; no R10 WHAT×WHEN-versus-baseline result
+existed. The owner saw the A1 numbers (ww − tpp ≈ +0.05, ww − gdn ≈ +0.12 at u4096), judged that GO is unlikely and
+that Q3 (long context) is the open question, and cut Stage A further:
+
+1. **A2 runs seed 0 only** (tpp, gdn, ww at R10). Seeds 1 and 2 are deferred (not cancelled).
+2. Kept: A1 (finished, with the gdn re-sweep below) → `deltanet` and `ww_v8` at R10 seed 0 (A3_abl) → A2 seed 0 →
+   A5 on those checkpoints → `ww.gate early` (informational) and `ww.gate report` → stop and report.
+3. Consequence, accepted in advance: Q1/Q2 rest on **one seed**; E1's "every seed" rule cannot be applied; the
+   report must say so. PLAN §5 already treats a decision resting on a single seed as provisional.
+4. **gdn re-sweep (review finding 10, `docs/REVIEW_2026-11-01.md`):** the review commit `31a35b8`, pushed while
+   A1 was running, gives fla's short convolutions N(0, 0.02). The 5 gdn A1 runs had used PyTorch's default init,
+   so gdn's sweep is re-run with `--force` before `select-lr`. tpp and ww have no convolutions: unaffected.

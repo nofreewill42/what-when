@@ -14,15 +14,15 @@ for anything worth knowing later. Current step is in bold._
 - [x] A0.7 anchor: **1.8147**, not 1.970 ± 0.05 — offset explained (old data order: one book per batch), see log
 - [x] A0.8 `ww.queue plan` = 108 GPU-h without A4b (> 36) — owner decided **Amendment 1** (PLAN §10): cut plan below
 - [x] Amendment 1 items 1, 2, 4, 5 done (push, anchor note, Q4 at chunk 32, ww in_proj fp32: +3.6% time, noise floor unchanged)
-- [ ] **A1** LR sweep done, `results/lr_choice.json` has tpp, gdn, ww (edge rule applied)
+- [ ] **A1** LR sweep done (gdn re-swept with the review's conv init), `results/lr_choice.json` has tpp, gdn, ww (edge rule applied)
 - [ ] A3 (Amendment 1): `deltanet`, `ww_v8` at R10 seed 0
-- [ ] A2 R10 done (3 arms × 3 seeds)
-- [ ] E1 early-exit check run — result: ______ — **report to owner**
+- [ ] A2 R10 seed 0 (3 arms) — seeds 1, 2 deferred (Amendment 2)
+- [ ] E1 run (informational only: one seed, Amendment 2) — result: ______ — **report to owner**
 - [—] A4 R40, A4b — deferred (Amendment 1)
 - [—] A6 iso-time — deferred (Amendment 1)
 - [ ] A5 long-context + decode on the A2 seed-0 checkpoints, figures made
 - [—] other A3 ablations, A3b — deferred (Amendment 1)
-- [ ] **G1** (from R10) `results/GATE_REPORT.md` written and committed — verdict: ______ — **report to owner, stop**
+- [ ] **G1** (from R10, seed 0) `results/GATE_REPORT.md` written and committed — verdict: ______ — **report to owner, stop**
 
 ## Measured so far
 
@@ -59,3 +59,7 @@ for anything worth knowing later. Current step is in bold._
   the recurrence itself is ~4KV per head). ww/tpp = 1.16 at chunk 32 but 1.51 at chunk 64, which crosses the 1.5
   threshold. Owner to decide how Q4 is measured before G1.
 - 2026-11-01 — Amendment 1 recorded (PLAN §10). ww throughput with fp32 in_proj: 31,874 targets/s (2,056 ms/update).
+- 2026-11-02 — Review commits 31a35b8 / e2e83e1 pulled during A1. gdn's 5 sweep runs used the old conv init ->
+  re-run (DEVIATIONS). tpp best 1e-3 (1.6576), ww best so far 1e-3 (1.7106); old-init gdn best 8e-3 (1.5934, edge).
+- 2026-11-02 — Amendment 2 (PLAN §11): A2 seed 0 only; deltanet + ww_v8 kept; then A5 and the gate report.
+  Remaining work runs unattended via scratchpad `chain_amend2.sh` (log: runs/chain_amend2.log).
