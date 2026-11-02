@@ -63,3 +63,6 @@ for anything worth knowing later. Current step is in bold._
   re-run (DEVIATIONS). tpp best 1e-3 (1.6576), ww best so far 1e-3 (1.7106); old-init gdn best 8e-3 (1.5934, edge).
 - 2026-11-02 — Amendment 2 (PLAN §11): A2 seed 0 only; deltanet + ww_v8 kept; then A5 and the gate report.
   Remaining work runs unattended via scratchpad `chain_amend2.sh` (log: runs/chain_amend2.log).
+- 2026-11-02 — **Paused by the owner.** Chain stopped; ww A1 lr8e-3 run stopped mid-run (last.pt kept, resumes with
+  `python -m ww.queue A1`). Not yet done: tests on the review code, gdn re-sweep, select-lr, A3 deltanet/ww_v8,
+  A2 seed 0, A5, gate report. To continue: re-launch scratchpad `chain_amend2.sh` steps (or run them by hand).
